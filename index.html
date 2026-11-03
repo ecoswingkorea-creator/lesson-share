@@ -67,6 +67,12 @@ async function rpc(name, args) {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const logo = '<div class="logo" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 240 240"><rect x="40" y="84" width="12" height="72" rx="6" fill="#9FD3AC"/><rect x="188" y="84" width="12" height="72" rx="6" fill="#9FD3AC"/><circle cx="120" cy="120" r="60" fill="#F5F4EE"/></svg></div>';
 const check = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l4 4 10-10"/></svg>';
+function proBrand(pro, fallbackTitle, fallbackSub) {
+  if (!pro || !pro.name) return `<div class="brand">${logo}<div><b>${fallbackTitle}</b><small>${fallbackSub}</small></div></div>`;
+  const sub = [pro.org ? `${pro.org} 프로` : '', pro.place || ''].filter(Boolean).join(' · ');
+  return `<div class="brand"><div class="logo" aria-hidden="true" style="border-radius:22px;font-size:18px;font-weight:700;color:#fff">${esc(pro.name.trim().charAt(0))}</div>
+    <div><b>${esc(pro.name)}</b><small>${esc(sub || fallbackSub)}</small></div></div>${pro.intro ? `<p class="lead" style="margin-top:-4px">${esc(pro.intro)}</p>` : ''}`;
+}
 function fail(msg) { app.innerHTML = `<div class="center">${esc(msg)}</div>`; }
 
 async function showLesson(token) {
@@ -82,7 +88,7 @@ async function showLesson(token) {
     const count = hw.filter((_, i) => done[i]).length;
     app.innerHTML = `
       <header>
-        <div class="brand">${logo}<div><b>골프 레슨 일지</b><small>레슨비서</small></div></div>
+        ${proBrand(d.pro, '골프 레슨 일지', '레슨비서')}
         <div style="display:flex;flex-direction:column;gap:6px">
           <div class="mono">${date}${d.lesson_no ? ` · ${d.lesson_no}회차 레슨` : ''}</div>
           <h1>${esc(d.member_name || '회원')} 회원님의<br>오늘 레슨 일지</h1>
@@ -122,7 +128,7 @@ async function showConsent(token) {
     ['[필수]', '개인정보 수집·이용', '이름, 연락처, 레슨 기록', true],
     ['[선택]', '부상·통증 정보 기록', '레슨에 필요한 범위만 일지에 남겨요', false],
   ];
-  const header = `<header><div class="brand">${logo}<div><b>골프 레슨 녹음 안내</b><small>첫 레슨 전 한 번만 확인해요</small></div></div>
+  const header = `<header>${proBrand(d.pro, '골프 레슨 녹음 안내', '첫 레슨 전 한 번만 확인해요')}
     <h1>${esc(d.member_name)} 회원님,<br>레슨 내용을 녹음해도 될까요?</h1>
     <p class="lead">녹음은 레슨 일지를 정확하게 남기기 위해서만 쓰여요. 일지가 만들어지면 녹음 파일은 지워집니다.</p></header>`;
   const info = `<section class="list">
