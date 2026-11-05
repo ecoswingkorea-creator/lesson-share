@@ -45,6 +45,18 @@ main{padding:20px;display:flex;flex-direction:column;gap:14px}
 .done{background:var(--greenSoft);border-radius:18px;padding:20px;text-align:center;display:flex;flex-direction:column;gap:6px}
 footer{padding:8px 20px 32px;text-align:center}
 .center{padding:60px 20px;text-align:center;color:var(--sub)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch}
+.chip{flex:none;min-width:58px;height:58px;border-radius:12px;border:1px solid var(--line);background:#fff;font:inherit;font-size:13px;color:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer}
+.chip b{font-size:16px}.chip.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.slots{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.slot{height:44px;border-radius:10px;border:1px solid var(--line);background:#fff;font:inherit;font-size:14px;color:var(--ink);cursor:pointer}
+.slot:disabled{background:#EFEDE6;color:#A3A9A2;text-decoration:line-through;cursor:default}
+.slot.on{background:var(--green);color:#fff;border-color:var(--green)}
+.mine{display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--soft)}.mine:last-child{border-bottom:0}
+.mini{height:36px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:#fff;font:inherit;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer}
+.st{font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px}
+.st.pending{background:#F7EBD9;color:#8A4E0E}.st.approved{background:var(--greenSoft);color:#1F4A2B}.st.declined,.st.withdrawn{background:#EFEDE6;color:#45504A}
+textarea{width:100%;min-height:72px;border-radius:12px;border:1px solid var(--line);padding:12px;font:inherit;font-size:15px;color:var(--ink);background:#FBFAF6}
 </style>
 </head>
 <body>
@@ -61,7 +73,11 @@ async function rpc(name, args) {
     headers: { apikey: KEY, 'Content-Type': 'application/json' },
     body: JSON.stringify(args),
   });
-  if (!r.ok) throw new Error(String(r.status));
+  if (!r.ok) {
+    let msg = String(r.status);
+    try { const j = await r.json(); if (j && j.message) msg = j.message; } catch {}
+    throw new Error(msg);
+  }
   return r.json();
 }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -104,6 +120,7 @@ async function showLesson(token) {
         ${d.next_plan ? `<section class="note"><h2>다음 레슨 계획</h2><p class="p">${esc(d.next_plan)}</p></section>` : ''}
       </main>
       <footer><div class="small">${d.audio_deleted ? '🔒 레슨 녹음 파일은 일지 작성 후 삭제되었습니다' : '🔒 레슨 녹음 파일은 일지 확인 후 삭제됩니다'}</div>
+      ${d.booking_token ? `<a class="link" style="display:flex;align-items:center;justify-content:center" href="?b=${encodeURIComponent(d.booking_token)}">다음 레슨 예약 · 시간 변경 요청하기</a>` : ''}
       <div class="small">레슨비서로 작성된 일지</div></footer>`;
     app.querySelectorAll('.task').forEach((b) =>
       b.addEventListener('click', async () => {
@@ -171,7 +188,97 @@ async function showConsent(token) {
   if (d.consented_at) finished(true); else render();
 }
 
+const DOW = ['일', '월', '화', '수', '목', '금', '토'];
+const two = (n) => String(n).padStart(2, '0');
+const fmt = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}월 ${d.getDate()}일(${DOW[d.getDay()]}) ${two(d.getHours())}:${two(d.getMinutes())}`; };
+const KIND = { new: '새 레슨 예약', change: '시간 변경', cancel: '레슨 취소' };
+const STATUS = { pending: '프로님 확인 중', approved: '확정', declined: '어려워요', withdrawn: '요청 취소함' };
+
+async function showBooking(token) {
+  let d;
+  try { d = await rpc('get_booking', { p_token: token }); } catch { return fail('잠시 뒤 다시 열어주세요.'); }
+  if (!d) return fail('링크를 찾을 수 없어요. 프로님께 다시 요청해 주세요.');
+  document.title = '레슨 예약';
+  let pick = null; // { kind, schedule_id, date, from }
+  let day = 0, slot = null;
+
+  const header = () => `<header>${proBrand(d.pro, '레슨 예약', '레슨비서')}
+    <h1>${esc(d.member_name)} 회원님,<br>${pick ? (pick.kind === 'new' ? '원하는 레슨 시간을 골라주세요' : '바꾸고 싶은 시간을 골라주세요') : '예약·변경을 도와드릴게요'}</h1></header>`;
+
+  const busyAt = (start, end) => (d.busy || []).some((b) => {
+    if (pick && pick.from && new Date(b.start).getTime() === new Date(pick.from).getTime()) return false;
+    return new Date(b.start) < end && new Date(b.end) > start;
+  });
+
+  const home = () => {
+    pick = null; slot = null;
+    const mine = d.mine || [];
+    const reqs = d.requests || [];
+    app.innerHTML = `${header()}<main>
+      <section class="card"><h2>예정된 내 레슨</h2>
+        ${mine.length ? mine.map((m, i) => `<div class="mine"><div style="flex:1;font-size:15px;font-weight:600">${fmt(m.start)}</div>
+          <button class="mini" data-ch="${i}">시간 변경</button><button class="mini" data-cx="${i}">취소</button></div>`).join('')
+          : '<p class="small" style="margin:0">앞으로 4주 동안 잡힌 레슨이 없어요.</p>'}
+      </section>
+      <button class="btn" id="new">+ 새 레슨 예약 요청</button>
+      ${reqs.length ? `<section class="card"><h2>내 요청</h2>${reqs.map((r) => `<div class="mine"><div style="flex:1;display:flex;flex-direction:column;gap:2px">
+          <span style="font-size:14px;font-weight:600">${KIND[r.kind]}${r.requested_start ? ` · ${fmt(r.requested_start)}` : r.from_start ? ` · ${fmt(r.from_start)}` : ''}</span>
+          ${r.kind === 'change' && r.from_start ? `<span class="small">기존 ${fmt(r.from_start)}</span>` : ''}</div>
+          <span class="st ${r.status}">${STATUS[r.status]}</span>${r.status === 'pending' ? `<button class="mini" data-wd="${esc(r.id)}">요청 취소</button>` : ''}</div>`).join('')}</section>` : ''}
+      <div class="small" style="text-align:center">요청을 보내면 프로님이 확인 후 확정해 드려요.</div>
+    </main>`;
+    document.getElementById('new').onclick = () => { pick = { kind: 'new' }; picker(); };
+    app.querySelectorAll('[data-ch]').forEach((b) => b.onclick = () => { const m = mine[Number(b.dataset.ch)]; pick = { kind: 'change', schedule_id: m.schedule_id, date: m.date, from: m.start }; picker(); });
+    app.querySelectorAll('[data-cx]').forEach((b) => b.onclick = async () => {
+      const m = mine[Number(b.dataset.cx)];
+      if (!confirm(`${fmt(m.start)} 레슨 취소를 요청할까요?`)) return;
+      await send({ p_kind: 'cancel', p_schedule_id: m.schedule_id, p_date: m.date, p_requested_start: null, p_note: null });
+    });
+    app.querySelectorAll('[data-wd]').forEach((b) => b.onclick = async () => {
+      try { d = await rpc('withdraw_booking', { p_token: token, p_id: b.dataset.wd }); home(); } catch (e) { alert(e.message); }
+    });
+  };
+
+  const send = async (args) => {
+    try { d = await rpc('request_booking', { p_token: token, ...args }); alert('요청을 보냈어요. 프로님이 확인하면 확정돼요.'); home(); }
+    catch (e) { alert(/^\d+$/.test(e.message) ? '요청을 보내지 못했어요. 잠시 뒤 다시 해주세요.' : e.message); }
+  };
+
+  const picker = () => {
+    const dur = d.duration_min || 50;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const days = Array.from({ length: 21 }, (_, i) => { const x = new Date(today); x.setDate(x.getDate() + i); return x; });
+    const base = days[day];
+    const now = new Date();
+    const slots = [];
+    const steps = dur < 30 ? [0, 15, 30, 45] : [0, 30];
+    for (let h = 6; h <= 22; h++) for (const mm of steps) {
+      const st = new Date(base); st.setHours(h, mm, 0, 0);
+      const en = new Date(st.getTime() + dur * 60000);
+      if (en.getHours() > 23 || (en.getHours() === 23 && en.getMinutes() > 0)) continue;
+      slots.push({ st, off: st <= now || busyAt(st, en) });
+    }
+    app.innerHTML = `${header()}<main>
+      ${pick.kind === 'change' ? `<div class="small">기존 레슨: <b>${fmt(pick.from)}</b></div>` : ''}
+      <section class="card"><h2>날짜</h2><div class="chips">${days.map((x, i) => `<button class="chip ${i === day ? 'on' : ''}" data-day="${i}"><span>${i === 0 ? '오늘' : DOW[x.getDay()]}</span><b>${x.getDate()}</b></button>`).join('')}</div></section>
+      <section class="card"><div class="row"><h2>시간</h2><span class="small">${dur}분 레슨 · 회색은 이미 찬 시간</span></div>
+        <div class="slots">${slots.map((x, i) => `<button class="slot ${slot && slot.getTime() === x.st.getTime() ? 'on' : ''}" data-slot="${i}" ${x.off ? 'disabled' : ''}>${two(x.st.getHours())}:${two(x.st.getMinutes())}</button>`).join('')}</div></section>
+      <textarea id="note" placeholder="프로님께 남길 말 (선택)"></textarea>
+      <button class="btn" id="go" ${slot ? '' : 'disabled'}>${slot ? `${fmt(slot.toISOString())} 으로 요청하기` : '시간을 골라주세요'}</button>
+      <button class="link" id="back">돌아가기</button></main>`;
+    app.querySelectorAll('[data-day]').forEach((b) => b.onclick = () => { day = Number(b.dataset.day); slot = null; picker(); });
+    app.querySelectorAll('[data-slot]').forEach((b) => b.onclick = () => { slot = slots[Number(b.dataset.slot)].st; const n = document.getElementById('note').value; picker(); document.getElementById('note').value = n; });
+    document.getElementById('back').onclick = home;
+    document.getElementById('go').onclick = () => {
+      if (!slot) return;
+      send({ p_kind: pick.kind, p_schedule_id: pick.schedule_id || null, p_date: pick.date || null, p_requested_start: slot.toISOString(), p_note: document.getElementById('note').value });
+    };
+  };
+  home();
+}
+
 if (q.get('l')) showLesson(q.get('l'));
+else if (q.get('b')) showBooking(q.get('b'));
 else if (q.get('c')) showConsent(q.get('c'));
 else fail('레슨비서 · 골프 프로의 레슨 일지 비서');
 </script>
