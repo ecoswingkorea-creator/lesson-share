@@ -415,9 +415,10 @@ async function doInstall() {
   }
   if (isIOS) {
     return sheet(`<h2 style="margin:0;font-size:18px">아이폰 홈 화면에 추가</h2>
-      <div class="step"><i>1</i><span>화면 아래(또는 위)의 공유 버튼 <span class="ico"><svg width="16" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E6A3E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v8h14v-8"/></svg></span> 을 눌러요</span></div>
-      <div class="step"><i>2</i><span>아래로 내려서 <b>홈 화면에 추가</b>를 눌러요</span></div>
-      <div class="step"><i>3</i><span>오른쪽 위 <b>추가</b>를 누르면 끝!</span></div>
+      <div class="small" style="margin-top:-6px">아이폰은 보안 때문에 이 버튼으로 바로 설치할 수 없어서, 아래처럼 직접 추가해야 해요 (10초)</div>
+      <div class="step"><i>1</i><span>화면 맨 아래 주소창 왼쪽의 <span class="ico">☰</span> 또는 <span class="ico">⋯</span> 버튼을 눌러요<br><span class="small">공유 버튼 <span class="ico"><svg width="14" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E6A3E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v8h14v-8"/></svg></span>이 바로 보이면 그걸 눌러도 돼요</span></span></div>
+      <div class="step"><i>2</i><span><b>공유</b>를 누르고, 목록을 아래로 내려 <b>홈 화면에 추가</b>를 눌러요</span></div>
+      <div class="step"><i>3</i><span>오른쪽 위 <b>추가</b>를 누르면 홈 화면에 아이콘이 생겨요!</span></div>
       <div class="small">Safari에서 열었을 때만 보여요. 다른 앱 안에서 열렸다면 먼저 Safari로 열어 주세요.</div>`);
   }
   sheet(`<h2 style="margin:0;font-size:18px">홈 화면에 추가</h2>
