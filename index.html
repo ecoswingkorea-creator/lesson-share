@@ -6,7 +6,6 @@
 <meta name="robots" content="noindex, nofollow">
 <title>레슨비서</title>
 <meta name="theme-color" content="#15201A">
-<link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -359,6 +358,11 @@ async function showNote(token) {
       <footer><div class="small">🔒 녹음 파일은 일지 작성 후 삭제돼요 · 프로님 개인 메모는 보이지 않아요</div>
 </footer>`;
     wireInstall();
+    if (q.get('add') && !standalone && !render.guided) {
+      render.guided = true;
+      history.replaceState(null, '', '?n=' + encodeURIComponent(token));
+      setTimeout(doInstall, 300);
+    }
     app.querySelectorAll('[data-open]').forEach((b) => b.onclick = () => { const t = b.dataset.open; open.has(t) ? open.delete(t) : open.add(t); render(); });
     app.querySelectorAll('.task').forEach((b) => b.onclick = async () => {
       const t = b.dataset.t, i = Number(b.dataset.i), arr = doneMap[t];
@@ -377,6 +381,14 @@ const isIOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' 
 const inKakao = /KAKAOTALK/i.test(UA);
 const inOtherApp = /NAVER\(inapp|Instagram|FBAN|FBAV|Line\//i.test(UA);
 const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+// 아이폰은 manifest가 있으면 그 시작 주소(회원 정보 없음)로 열려서, 안드로이드에만 붙인다.
+// 아이폰은 manifest 없이 "지금 보고 있는 주소"로 홈 화면 아이콘이 만들어진다.
+if (!isIOS) {
+  const l = document.createElement('link');
+  l.rel = 'manifest';
+  l.href = 'manifest.json';
+  document.head.appendChild(l);
+}
 let installEvent = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -413,6 +425,11 @@ async function doInstall() {
       <div class="step"><i>2</i><span><b>${isIOS ? 'Safari로 열기' : '다른 브라우저로 열기'}</b>를 눌러요</span></div>
       <div class="step"><i>3</i><span>열린 화면에서 다시 <b>추가</b> 버튼을 눌러 주세요</span></div>`);
   }
+  if (isIOS && !q.get('n') && store.get('lastNote')) {
+    // 일지 한 장이 아니라 회원 레슨노트가 아이콘으로 열리게, 레슨노트로 이동한 뒤 안내
+    location.href = '?n=' + encodeURIComponent(store.get('lastNote')) + '&add=1';
+    return;
+  }
   if (isIOS) {
     return sheet(`<h2 style="margin:0;font-size:18px">아이폰 홈 화면에 추가</h2>
       <div class="small" style="margin-top:-6px">아이폰은 보안 때문에 이 버튼으로 바로 설치할 수 없어서, 아래처럼 직접 추가해야 해요 (10초)</div>
@@ -440,6 +457,7 @@ if (q.get('l')) showLesson(q.get('l'));
 else if (q.get('n')) showNote(q.get('n'));
 else if (q.get('b')) showBooking(q.get('b'));
 else if (q.get('c')) showConsent(q.get('c'));
+else if (standalone) app.innerHTML = '<div class="center">레슨노트를 찾지 못했어요.<br><br>이 아이콘을 길게 눌러 지운 다음,<br>프로님께 받은 <b>레슨노트 링크</b>를 다시 열고<br><b>추가</b> 버튼으로 홈 화면에 추가해 주세요.</div>';
 else fail('레슨비서 · 골프 프로의 레슨 일지 비서');
 </script>
 </body>
