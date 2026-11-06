@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <title>레슨비서</title>
+<meta name="theme-color" content="#15201A">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="레슨노트">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
@@ -64,6 +72,16 @@ footer{padding:8px 20px 32px;text-align:center}
 .report{background:var(--ink);color:var(--paper);border-radius:18px;padding:18px;display:flex;flex-direction:column;gap:10px}
 .report h2{margin:0;font-size:13px;color:var(--mint)}.report .head{font-size:17px;font-weight:700;line-height:1.5}
 .report .it{font-size:14px;line-height:1.6;color:#E3E9E4}
+.install{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 14px}
+.install img{width:40px;height:40px;border-radius:10px;flex:none}
+.install .tx{flex:1;font-size:13px;line-height:1.45}.install .tx b{display:block;font-size:14px}
+.install .go{height:40px;padding:0 14px;border-radius:10px;border:0;background:var(--green);color:#fff;font:inherit;font-size:14px;font-weight:700;cursor:pointer;flex:none}
+.install .x{border:0;background:transparent;color:var(--sub);font-size:18px;padding:4px 6px;cursor:pointer}
+.sheet{position:fixed;inset:0;background:rgba(21,32,26,.55);display:flex;align-items:flex-end;z-index:9}
+.sheet>div{background:#fff;width:100%;max-width:520px;margin:0 auto;border-radius:22px 22px 0 0;padding:22px 20px 34px;display:flex;flex-direction:column;gap:14px}
+.step{display:flex;gap:12px;align-items:center;font-size:15px;line-height:1.5}
+.step i{font-style:normal;width:28px;height:28px;border-radius:14px;background:var(--greenSoft);color:#1F4A2B;font-weight:700;display:flex;align-items:center;justify-content:center;flex:none}
+.ico{display:inline-flex;vertical-align:middle;border:1px solid var(--line);border-radius:8px;padding:2px 6px;margin:0 2px}
 textarea{width:100%;min-height:72px;border-radius:12px;border:1px solid var(--line);padding:12px;font:inherit;font-size:15px;color:var(--ink);background:#FBFAF6}
 </style>
 </head>
@@ -107,6 +125,7 @@ async function showLesson(token) {
   const date = `${dt.getFullYear()}.${String(dt.getMonth() + 1).padStart(2, '0')}.${String(dt.getDate()).padStart(2, '0')}`;
   let done = Array.isArray(d.homework_done) ? d.homework_done.slice() : [];
   document.title = `${d.member_name || '회원'}님 레슨 일지`;
+  if (d.booking_token) store.set('lastNote', d.booking_token);
   const render = () => {
     const hw = d.homework || [];
     const count = hw.filter((_, i) => done[i]).length;
@@ -119,6 +138,7 @@ async function showLesson(token) {
         </div>
       </header>
       <main>
+        ${d.booking_token ? installBanner() : ''}
         ${d.summary ? `<p class="p">${esc(d.summary)}</p>` : ''}
         ${(d.corrections || []).length ? `<section class="card"><h2>오늘 배운 것</h2>${d.corrections.map((c, i) => `<div class="item"><div class="n">${String(i + 1).padStart(2, '0')}</div><div>${esc(c)}</div></div>`).join('')}</section>` : ''}
         ${hw.length ? `<section class="card"><div class="row"><h2>다음 레슨까지 숙제</h2><div class="small">${count} / ${hw.length} 완료</div></div>
@@ -130,6 +150,7 @@ async function showLesson(token) {
       <footer><div class="small">${d.audio_deleted ? '🔒 레슨 녹음 파일은 일지 작성 후 삭제되었습니다' : '🔒 레슨 녹음 파일은 일지 확인 후 삭제됩니다'}</div>
       ${d.booking_token ? `<a class="btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none;margin:8px 0" href="?n=${encodeURIComponent(d.booking_token)}">내 레슨노트 전체 보기</a><a class="link" style="display:flex;align-items:center;justify-content:center" href="?b=${encodeURIComponent(d.booking_token)}">다음 레슨 예약 · 시간 변경 요청하기</a>` : ''}
       <div class="small">레슨비서로 작성된 일지</div></footer>`;
+    wireInstall();
     app.querySelectorAll('.task').forEach((b) =>
       b.addEventListener('click', async () => {
         const i = Number(b.dataset.i);
@@ -290,6 +311,7 @@ async function showNote(token) {
   try { d = await rpc('get_lesson_note', { p_token: token }); } catch { return fail('레슨노트를 불러오지 못했어요. 잠시 뒤 다시 열어주세요.'); }
   if (!d) return fail('레슨노트를 찾을 수 없어요. 프로님께 링크를 다시 요청해 주세요.');
   document.title = `${d.member_name}님 레슨노트`;
+  store.set('lastNote', token);
   const lessons = d.lessons || [];
   const doneMap = Object.fromEntries(lessons.map((l) => [l.share_token, Array.isArray(l.homework_done) ? l.homework_done.slice() : []]));
   const open = new Set(lessons.length ? [lessons[0].share_token] : []);
@@ -304,6 +326,7 @@ async function showNote(token) {
         <h1>${esc(d.member_name)} 회원님의<br>레슨노트</h1>
         <p class="lead">지난 레슨 ${lessons.length}회 · 일지와 숙제를 한 곳에서 볼 수 있어요</p></header>
       <main>
+        ${installBanner()}
         <section class="card"><div class="row"><h2>다음 레슨</h2><a class="small" href="?b=${encodeURIComponent(token)}">예약·변경 요청 ›</a></div>
           ${up ? `<div style="font-size:18px;font-weight:700">${fmt(up.start)}</div>${(d.upcoming || []).length > 1 ? `<div class="small">이후 ${(d.upcoming || []).slice(1, 4).map((u) => fmt(u.start)).join(' · ')}</div>` : ''}`
               : `<div class="small">잡힌 레슨이 없어요. 위의 "예약·변경 요청"으로 원하는 시간을 보내주세요.</div>`}
@@ -334,7 +357,8 @@ async function showNote(token) {
         }).join('') : '<div class="small">아직 일지가 없어요.</div>'}
       </main>
       <footer><div class="small">🔒 녹음 파일은 일지 작성 후 삭제돼요 · 프로님 개인 메모는 보이지 않아요</div>
-      <div class="small" style="margin-top:6px">홈 화면에 추가해 두면 앱처럼 쓸 수 있어요</div></footer>`;
+</footer>`;
+    wireInstall();
     app.querySelectorAll('[data-open]').forEach((b) => b.onclick = () => { const t = b.dataset.open; open.has(t) ? open.delete(t) : open.add(t); render(); });
     app.querySelectorAll('.task').forEach((b) => b.onclick = async () => {
       const t = b.dataset.t, i = Number(b.dataset.i), arr = doneMap[t];
@@ -345,6 +369,70 @@ async function showNote(token) {
     });
   };
   render();
+}
+
+// ───────── 홈 화면에 추가 (앱처럼 쓰기) ─────────
+const UA = navigator.userAgent;
+const isIOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const inKakao = /KAKAOTALK/i.test(UA);
+const inOtherApp = /NAVER\(inapp|Instagram|FBAN|FBAV|Line\//i.test(UA);
+const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+let installEvent = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+
+function installBanner() {
+  if (standalone || store.get('installHidden') === '1') return '';
+  return `<div class="install" id="install"><img src="icon-192.png" alt=""><div class="tx"><b>홈 화면에 추가하기</b>앱처럼 아이콘을 눌러 바로 열 수 있어요</div>
+    <button class="go" id="installGo">추가</button><button class="x" id="installX" aria-label="닫기">✕</button></div>`;
+}
+function sheet(html) {
+  const el = document.createElement('div');
+  el.className = 'sheet';
+  el.innerHTML = `<div>${html}<button class="btn" id="sheetOk">알겠어요</button></div>`;
+  el.addEventListener('click', (e) => { if (e.target === el || e.target.id === 'sheetOk') el.remove(); });
+  document.body.appendChild(el);
+}
+async function doInstall() {
+  if (inKakao) {
+    // 카톡 안의 창에서는 홈 화면 추가가 안 돼서, 기본 브라우저로 다시 열기
+    location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(location.href);
+    return;
+  }
+  if (installEvent) {
+    installEvent.prompt();
+    const r = await installEvent.userChoice.catch(() => null);
+    installEvent = null;
+    if (r && r.outcome === 'accepted') { store.set('installHidden', '1'); document.getElementById('install')?.remove(); }
+    return;
+  }
+  if (inOtherApp) {
+    return sheet(`<h2 style="margin:0;font-size:18px">브라우저로 열어 주세요</h2>
+      <div class="step"><i>1</i><span>오른쪽 위(또는 아래) <span class="ico">⋯</span> 메뉴를 눌러요</span></div>
+      <div class="step"><i>2</i><span><b>${isIOS ? 'Safari로 열기' : '다른 브라우저로 열기'}</b>를 눌러요</span></div>
+      <div class="step"><i>3</i><span>열린 화면에서 다시 <b>추가</b> 버튼을 눌러 주세요</span></div>`);
+  }
+  if (isIOS) {
+    return sheet(`<h2 style="margin:0;font-size:18px">아이폰 홈 화면에 추가</h2>
+      <div class="step"><i>1</i><span>화면 아래(또는 위)의 공유 버튼 <span class="ico"><svg width="16" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E6A3E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v8h14v-8"/></svg></span> 을 눌러요</span></div>
+      <div class="step"><i>2</i><span>아래로 내려서 <b>홈 화면에 추가</b>를 눌러요</span></div>
+      <div class="step"><i>3</i><span>오른쪽 위 <b>추가</b>를 누르면 끝!</span></div>
+      <div class="small">Safari에서 열었을 때만 보여요. 다른 앱 안에서 열렸다면 먼저 Safari로 열어 주세요.</div>`);
+  }
+  sheet(`<h2 style="margin:0;font-size:18px">홈 화면에 추가</h2>
+    <div class="step"><i>1</i><span>오른쪽 위 <span class="ico">⋮</span> 메뉴를 눌러요</span></div>
+    <div class="step"><i>2</i><span><b>홈 화면에 추가</b> 또는 <b>앱 설치</b>를 눌러요</span></div>
+    <div class="step"><i>3</i><span><b>추가</b>를 누르면 끝!</span></div>`);
+}
+function wireInstall() {
+  document.getElementById('installGo')?.addEventListener('click', doInstall);
+  document.getElementById('installX')?.addEventListener('click', () => { store.set('installHidden', '1'); document.getElementById('install')?.remove(); });
+}
+
+// 홈 화면 아이콘으로 열면(주소에 회원 정보가 없을 때) 마지막으로 본 레슨노트로
+if (!q.get('l') && !q.get('n') && !q.get('b') && !q.get('c') && store.get('lastNote')) {
+  location.replace('?n=' + encodeURIComponent(store.get('lastNote')));
 }
 
 if (q.get('l')) showLesson(q.get('l'));
