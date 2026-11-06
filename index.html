@@ -56,6 +56,14 @@ footer{padding:8px 20px 32px;text-align:center}
 .mini{height:36px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:#fff;font:inherit;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer}
 .st{font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px}
 .st.pending{background:#F7EBD9;color:#8A4E0E}.st.approved{background:var(--greenSoft);color:#1F4A2B}.st.declined,.st.withdrawn{background:#EFEDE6;color:#45504A}
+.bar{height:8px;border-radius:4px;background:var(--soft);overflow:hidden}.bar i{display:block;height:8px;background:var(--green);border-radius:4px}
+.big{font-family:'IBM Plex Mono',monospace;font-size:30px;font-weight:600}
+.lesson{border:1px solid var(--line);border-radius:14px;background:#fff;overflow:hidden}
+.lesson>button{width:100%;border:0;background:transparent;font:inherit;color:var(--ink);text-align:left;padding:14px 16px;display:flex;flex-direction:column;gap:4px;cursor:pointer}
+.lesson .body{padding:0 16px 16px;display:flex;flex-direction:column;gap:10px}
+.report{background:var(--ink);color:var(--paper);border-radius:18px;padding:18px;display:flex;flex-direction:column;gap:10px}
+.report h2{margin:0;font-size:13px;color:var(--mint)}.report .head{font-size:17px;font-weight:700;line-height:1.5}
+.report .it{font-size:14px;line-height:1.6;color:#E3E9E4}
 textarea{width:100%;min-height:72px;border-radius:12px;border:1px solid var(--line);padding:12px;font:inherit;font-size:15px;color:var(--ink);background:#FBFAF6}
 </style>
 </head>
@@ -120,7 +128,7 @@ async function showLesson(token) {
         ${d.next_plan ? `<section class="note"><h2>다음 레슨 계획</h2><p class="p">${esc(d.next_plan)}</p></section>` : ''}
       </main>
       <footer><div class="small">${d.audio_deleted ? '🔒 레슨 녹음 파일은 일지 작성 후 삭제되었습니다' : '🔒 레슨 녹음 파일은 일지 확인 후 삭제됩니다'}</div>
-      ${d.booking_token ? `<a class="link" style="display:flex;align-items:center;justify-content:center" href="?b=${encodeURIComponent(d.booking_token)}">다음 레슨 예약 · 시간 변경 요청하기</a>` : ''}
+      ${d.booking_token ? `<a class="btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none;margin:8px 0" href="?n=${encodeURIComponent(d.booking_token)}">내 레슨노트 전체 보기</a><a class="link" style="display:flex;align-items:center;justify-content:center" href="?b=${encodeURIComponent(d.booking_token)}">다음 레슨 예약 · 시간 변경 요청하기</a>` : ''}
       <div class="small">레슨비서로 작성된 일지</div></footer>`;
     app.querySelectorAll('.task').forEach((b) =>
       b.addEventListener('click', async () => {
@@ -277,7 +285,70 @@ async function showBooking(token) {
   home();
 }
 
+async function showNote(token) {
+  let d;
+  try { d = await rpc('get_lesson_note', { p_token: token }); } catch { return fail('레슨노트를 불러오지 못했어요. 잠시 뒤 다시 열어주세요.'); }
+  if (!d) return fail('레슨노트를 찾을 수 없어요. 프로님께 링크를 다시 요청해 주세요.');
+  document.title = `${d.member_name}님 레슨노트`;
+  const lessons = d.lessons || [];
+  const doneMap = Object.fromEntries(lessons.map((l) => [l.share_token, Array.isArray(l.homework_done) ? l.homework_done.slice() : []]));
+  const open = new Set(lessons.length ? [lessons[0].share_token] : []);
+  const day = (iso) => { const x = new Date(iso); return `${x.getMonth() + 1}월 ${x.getDate()}일(${DOW[x.getDay()]})`; };
+
+  const render = () => {
+    const up = (d.upcoming || [])[0];
+    const r = d.report && d.report.report;
+    const rate = r && r.homework_total ? Math.round((r.homework_done / r.homework_total) * 100) : null;
+    app.innerHTML = `
+      <header>${proBrand(d.pro, '내 레슨노트', '레슨비서')}
+        <h1>${esc(d.member_name)} 회원님의<br>레슨노트</h1>
+        <p class="lead">지난 레슨 ${lessons.length}회 · 일지와 숙제를 한 곳에서 볼 수 있어요</p></header>
+      <main>
+        <section class="card"><div class="row"><h2>다음 레슨</h2><a class="small" href="?b=${encodeURIComponent(token)}">예약·변경 요청 ›</a></div>
+          ${up ? `<div style="font-size:18px;font-weight:700">${fmt(up.start)}</div>${(d.upcoming || []).length > 1 ? `<div class="small">이후 ${(d.upcoming || []).slice(1, 4).map((u) => fmt(u.start)).join(' · ')}</div>` : ''}`
+              : `<div class="small">잡힌 레슨이 없어요. 위의 "예약·변경 요청"으로 원하는 시간을 보내주세요.</div>`}
+        </section>
+        ${(d.passes || []).map((p) => {
+          const left = p.total != null ? p.total - p.used : null;
+          return `<section class="card"><div class="row"><h2>수강권 · ${esc(p.name)}</h2>${p.ends_on ? `<div class="small">${p.ends_on.slice(5).replace('-', '.')}까지</div>` : ''}</div>
+            ${left != null ? `<div><span class="big">${left}</span><span class="small"> 회 남음 / ${p.total}회</span></div><div class="bar"><i style="width:${Math.min(100, (p.used / p.total) * 100)}%"></i></div>`
+              : `<div class="small">기간제 · 지금까지 ${p.used}회 레슨</div>`}</section>`;
+        }).join('')}
+        ${r ? `<section class="report"><h2>성장 리포트 · 레슨 ${d.report.lessons_count}회${rate != null ? ` · 숙제 ${rate}%` : ''}</h2>
+            <div class="head">${esc(r.headline)}</div>
+            ${(r.improved || []).map((t) => `<div class="it">✓ ${esc(t)}</div>`).join('')}
+            ${(r.working_on || []).length ? `<h2 style="margin-top:4px">지금 집중하는 것</h2>${r.working_on.map((t) => `<div class="it">• ${esc(t)}</div>`).join('')}` : ''}
+            ${r.next_goal ? `<h2 style="margin-top:4px">다음 목표</h2><div class="it">${esc(r.next_goal)}</div>` : ''}</section>` : ''}
+        <div class="row" style="margin-top:4px"><h2 style="margin:0;font-size:15px">지난 레슨</h2><span class="small">최신순</span></div>
+        ${lessons.length ? lessons.map((l) => {
+          const isOpen = open.has(l.share_token);
+          const done = doneMap[l.share_token];
+          const hw = l.homework || [];
+          return `<div class="lesson"><button data-open="${esc(l.share_token)}">
+              <span class="small">${l.no}회차 · ${day(l.started_at)}${hw.length ? ` · 숙제 ${hw.filter((_, i) => done[i]).length}/${hw.length}` : ''}</span>
+              <b style="font-size:15px;line-height:1.5">${esc(l.summary || '레슨 일지')}</b></button>
+            ${isOpen ? `<div class="body">
+              ${(l.corrections || []).map((c, i) => `<div class="item"><div class="n">${String(i + 1).padStart(2, '0')}</div><div>${esc(c)}</div></div>`).join('')}
+              ${hw.map((h, i) => `<button class="task ${done[i] ? 'on' : ''}" data-t="${esc(l.share_token)}" data-i="${i}"><span class="box">${done[i] ? check : ''}</span><span class="t">${esc(h)}</span></button>`).join('')}
+              ${l.next_plan ? `<div class="small">다음 계획 · ${esc(l.next_plan)}</div>` : ''}</div>` : ''}</div>`;
+        }).join('') : '<div class="small">아직 일지가 없어요.</div>'}
+      </main>
+      <footer><div class="small">🔒 녹음 파일은 일지 작성 후 삭제돼요 · 프로님 개인 메모는 보이지 않아요</div>
+      <div class="small" style="margin-top:6px">홈 화면에 추가해 두면 앱처럼 쓸 수 있어요</div></footer>`;
+    app.querySelectorAll('[data-open]').forEach((b) => b.onclick = () => { const t = b.dataset.open; open.has(t) ? open.delete(t) : open.add(t); render(); });
+    app.querySelectorAll('.task').forEach((b) => b.onclick = async () => {
+      const t = b.dataset.t, i = Number(b.dataset.i), arr = doneMap[t];
+      const next = !arr[i]; arr[i] = next; render();
+      try { const res = await rpc('set_homework_done', { p_token: t, p_index: i, p_done: next }); if (Array.isArray(res)) doneMap[t] = res; }
+      catch { arr[i] = !next; alert('저장하지 못했어요. 인터넷 연결을 확인해 주세요.'); }
+      render();
+    });
+  };
+  render();
+}
+
 if (q.get('l')) showLesson(q.get('l'));
+else if (q.get('n')) showNote(q.get('n'));
 else if (q.get('b')) showBooking(q.get('b'));
 else if (q.get('c')) showConsent(q.get('c'));
 else fail('레슨비서 · 골프 프로의 레슨 일지 비서');
