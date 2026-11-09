@@ -280,7 +280,7 @@ async function showBooking(token) {
     const base = days[day];
     const now = new Date();
     const slots = [];
-    const steps = dur < 30 ? [0, 15, 30, 45] : [0, 30];
+    const steps = [0, 15, 30, 45]; // 15분 단위로 고를 수 있게
     for (let h = 6; h <= 22; h++) for (const mm of steps) {
       const st = new Date(base); st.setHours(h, mm, 0, 0);
       const en = new Date(st.getTime() + dur * 60000);
