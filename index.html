@@ -282,6 +282,505 @@ async function showBooking(token) {
     const days = Array.from({ length: 21 }, (_, i) => { const x = new Date(today); x.setDate(x.getDate() + i); return x; });
     const base = days[day];
     const now = new Date();
+    const cfg = d.booking || null; // 프로가 정한 예약 설정 (시간표·휴무일·하루 최대)
+    const bh = cfg && cfg.slots && Object.values(cfg.slots).some((v) => v && v.length) ? cfg : null; // 시간표가 있을 때만
+    // 그날 이미 잡힌 레슨 수 (바꾸려는 내 레슨은 빼고)
+    const ymdOf = (x) => `${x.getFullYear()}-${two(x.getMonth() + 1)}-${two(x.getDate())}`;
+    const lessonsOn = (x) => (d.busy || []).filter((b) => b.kind === 'lesson' && b.date === ymdOf(x)
+      && !(pick && pick.from && new Date(b.start).getTime() === new Date(pick.from).getTime())).length;
+    // 휴무일: 날짜 지정 · 공휴일 · 매달 n째 요일
+    const closedWhy = (x) => {
+      const c = cfg && cfg.closed; if (!c) return '';
+      const key = ymdOf(x);
+      if ((c.dates || []).includes(key)) return '휴무일';
+      if (c.holidays && KR_HOLIDAYS.has(key)) return '공휴일';
+      const nth = Math.ceil(x.getDate() / 7);
+      const last = new Date(x.getFullYear(), x.getMonth() + 1, 0).getDate() - x.getDate() < 7;
+      if ((c.monthly || []).some((m) => m.dow === x.getDay() && (m.nth === nth || (m.nth === 5 && last)))) return '정기 휴무';
+      return '';
+    };
+    const dayTimes = (x) => closedWhy(x) ? [] : bh ? (bh.slots[String(x.getDay())] || []) : null;
+    const dayFull = (x) => cfg && cfg.max_per_day ? lessonsOn(x) >= cfg.max_per_day : false;
+    const slots = [];
+    const times = dayTimes(base);
+    if (times) {
+      for (const t of times) {
+        const st = new Date(base); st.setHours(Number(t.slice(0, 2)), Number(t.slice(3, 5)), 0, 0);
+        const en = new Date(st.getTime() + dur * 60000);
+        slots.push({ st, off: st <= now || busyAt(st, en) || dayFull(base) });
+      }
+    } else {
+      const steps = [0, 15, 30, 45]; // 시간표가 없으면 15분 단위
+      for (let h = 6; h <= 22; h++) for (const mm of steps) {
+        const st = new Date(base); st.setHours(h, mm, 0, 0);
+        const en = new Date(st.getTime() + dur * 60000);
+        if (en.getHours() > 23 || (en.getHours() === 23 && en.getMinutes() > 0)) continue;
+        slots.push({ st, off: st <= now || busyAt(st, en) || dayFull(base) });
+      }
+    }
+    const open = slots.filter((x) => !x.off).length;
+    const dayNote = closedWhy(base) ? `이 날은 쉬는 날이에요 (${closedWhy(base)})` : times && !times.length ? '이 날은 레슨이 없는 날이에요' : dayFull(base) ? '이 날은 예약이 다 찼어요' : !open ? '이 날은 남은 시간이 없어요' : '';
+    app.innerHTML = `${header()}<main>
+      ${pick.kind === 'change' ? `<div class="small">기존 레슨: <b>${fmt(pick.from)}</b></div>` : ''}
+      <section class="card"><h2>날짜</h2><div class="chips">${days.map((x, i) => { const t = dayTimes(x); const closed = (t && !t.length) || dayFull(x); return `<button class="chip ${i === day ? 'on' : ''}" data-day="${i}" ${closed && i !== day ? 'style="opacity:.35"' : ''}><span>${i === 0 ? '오늘' : DOW[x.getDay()]}</span><b>${x.getDate()}</b></button>`; }).join('')}</div></section>
+      <section class="card"><div class="row"><h2>시간</h2><span class="small">${dur}분 레슨 · 회색은 이미 찬 시간</span></div>
+        ${dayNote ? `<p class="small" style="margin:4px 0 0">${dayNote}</p>` : ''}
+        <div class="slots">${slots.map((x, i) => `<button class="slot ${slot && slot.getTime() === x.st.getTime() ? 'on' : ''}" data-slot="${i}" ${x.off ? 'disabled' : ''}>${two(x.st.getHours())}:${two(x.st.getMinutes())}</button>`).join('')}</div></section>
+      <textarea id="note" placeholder="프로님께 남길 말 (선택)"></textarea>
+      <button class="btn" id="go" ${slot ? '' : 'disabled'}>${slot ? `${fmt(slot.toISOString())} 으로 요청하기` : '시간을 골라주세요'}</button>
+      <button class="link" id="back">돌아가기</button></main><footer>${brandMark}</footer>`;
+    app.querySelectorAll('[data-day]').forEach((b) => b.onclick = () => { day = Number(b.dataset.day); slot = null; picker(); });
+    app.querySelectorAll('[data-slot]').forEach((b) => b.onclick = () => { slot = slots[Number(b.dataset.slot)].st; const n = document.getElementById('note').value; picker(); document.getElementById('note').value = n; });
+    document.getElementById('back').onclick = home;
+    document.getElementById('go').onclick = () => {
+      if (!slot) return;
+      send({ p_kind: pick.kind, p_schedule_id: pick.schedule_id || null, p_date: pick.date || null, p_requested_start: slot.toISOString(), p_note: document.getElementById('note').value });
+    };
+  };
+  home();
+}
+
+async function showNote(token) {
+  let d;
+  try { d = await rpc('get_lesson_note', { p_token: token }); } catch { return fail('레슨노트를 불러오지 못했어요. 잠시 뒤 다시 열어주세요.'); }
+  if (!d) return fail('레슨노트를 찾을 수 없어요. 프로님께 링크를 다시 요청해 주세요.');
+  document.title = `${d.member_name}님 레슨노트`;
+  store.set('lastNote', token);
+  const lessons = d.lessons || [];
+  const doneMap = Object.fromEntries(lessons.map((l) => [l.share_token, Array.isArray(l.homework_done) ? l.homework_done.slice() : []]));
+  const open = new Set(lessons.length ? [lessons[0].share_token] : []);
+  const day = (iso) => { const x = new Date(iso); return `${x.getMonth() + 1}월 ${x.getDate()}일(${DOW[x.getDay()]})`; };
+
+  const render = () => {
+    const up = (d.upcoming || [])[0];
+    const r = d.report && d.report.report;
+    const rate = r && r.homework_total ? Math.round((r.homework_done / r.homework_total) * 100) : null;
+    app.innerHTML = `
+      <header>${proBrand(d.pro, '내 레슨노트', '레슨비서')}
+        <h1>${esc(d.member_name)} 회원님의<br>레슨노트</h1>
+        <p class="lead">지난 레슨 ${lessons.length}회 · 일지와 숙제를 한 곳에서 볼 수 있어요</p></header>
+      <main>
+        ${installBanner()}
+        <section class="card"><div class="row"><h2>다음 레슨</h2><a class="small" href="?b=${encodeURIComponent(token)}">예약·변경 요청 ›</a></div>
+          ${up ? `<div style="font-size:18px;font-weight:700">${fmt(up.start)}</div>${(d.upcoming || []).length > 1 ? `<div class="small">이후 ${(d.upcoming || []).slice(1, 4).map((u) => fmt(u.start)).join(' · ')}</div>` : ''}`
+              : `<div class="small">잡힌 레슨이 없어요. 위의 "예약·변경 요청"으로 원하는 시간을 보내주세요.</div>`}
+        </section>
+        ${(d.passes || []).map((p) => {
+          const left = p.total != null ? p.total - p.used : null;
+          return `<section class="card"><div class="row"><h2>수강권 · ${esc(p.name)}</h2>${p.ends_on ? `<div class="small">${p.ends_on.slice(5).replace('-', '.')}까지</div>` : ''}</div>
+            ${left != null ? `<div><span class="big">${left}</span><span class="small"> 회 남음 / ${p.total}회</span></div><div class="bar"><i style="width:${Math.min(100, (p.used / p.total) * 100)}%"></i></div>`
+              : `<div class="small">기간제 · 지금까지 ${p.used}회 레슨</div>`}</section>`;
+        }).join('')}
+        ${r ? `<section class="report"><h2>성장 리포트 · 레슨 ${d.report.lessons_count}회${rate != null ? ` · 숙제 ${rate}%` : ''}</h2>
+            <div class="head">${esc(r.headline)}</div>
+            ${(r.improved || []).map((t) => `<div class="it">✓ ${esc(t)}</div>`).join('')}
+            ${(r.working_on || []).length ? `<h2 style="margin-top:4px">지금 집중하는 것</h2>${r.working_on.map((t) => `<div class="it">• ${esc(t)}</div>`).join('')}` : ''}
+            ${r.next_goal ? `<h2 style="margin-top:4px">다음 목표</h2><div class="it">${esc(r.next_goal)}</div>` : ''}</section>` : ''}
+        <div class="row" style="margin-top:4px"><h2 style="margin:0;font-size:15px">지난 레슨</h2><span class="small">최신순</span></div>
+        ${lessons.length ? lessons.map((l) => {
+          const isOpen = open.has(l.share_token);
+          const done = doneMap[l.share_token];
+          const hw = l.homework || [];
+          return `<div class="lesson"><button data-open="${esc(l.share_token)}">
+              <span class="small">${l.no}회차 · ${day(l.started_at)}${hw.length ? ` · 숙제 ${hw.filter((_, i) => done[i]).length}/${hw.length}` : ''}</span>
+              <b style="font-size:15px;line-height:1.5">${esc(l.summary || '레슨 일지')}</b></button>
+            ${isOpen ? `<div class="body">
+              ${(l.corrections || []).map((c, i) => `<div class="item"><div class="n">${String(i + 1).padStart(2, '0')}</div><div>${esc(c)}</div></div>`).join('')}
+              ${hw.map((h, i) => `<button class="task ${done[i] ? 'on' : ''}" data-t="${esc(l.share_token)}" data-i="${i}"><span class="box">${done[i] ? check : ''}</span><span class="t">${esc(h)}</span></button>`).join('')}
+              ${l.next_plan ? `<div class="small">다음 계획 · ${esc(l.next_plan)}</div>` : ''}</div>` : ''}</div>`;
+        }).join('') : '<div class="small">아직 일지가 없어요.</div>'}
+      </main>
+      <footer><div class="small">🔒 녹음 파일은 일지 작성 후 삭제돼요 · 프로님 개인 메모는 보이지 않아요</div>
+${brandMark}</footer>`;
+    wireInstall();
+    if (q.get('add') && !standalone && !render.guided) {
+      render.guided = true;
+      history.replaceState(null, '', '?n=' + encodeURIComponent(token));
+      setTimeout(doInstall, 300);
+    }
+    app.querySelectorAll('[data-open]').forEach((b) => b.onclick = () => { const t = b.dataset.open; open.has(t) ? open.delete(t) : open.add(t); render(); });
+    app.querySelectorAll('.task').forEach((b) => b.onclick = async () => {
+      const t = b.dataset.t, i = Number(b.dataset.i), arr = doneMap[t];
+      const next = !arr[i]; arr[i] = next; render();
+      try { const res = await rpc('set_homework_done', { p_token: t, p_index: i, p_done: next }); if (Array.isArray(res)) doneMap[t] = res; }
+      catch { arr[i] = !next; alert('저장하지 못했어요. 인터넷 연결을 확인해 주세요.'); }
+      render();
+    });
+  };
+  render();
+}
+
+// ───────── 홈 화면에 추가 (앱처럼 쓰기) ─────────
+const UA = navigator.userAgent;
+const isIOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const inKakao = /KAKAOTALK/i.test(UA);
+const inOtherApp = /NAVER\(inapp|Instagram|FBAN|FBAV|Line\//i.test(UA);
+const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+// 아이폰은 manifest가 있으면 그 시작 주소(회원 정보 없음)로 열려서, 안드로이드에만 붙인다.
+// 아이폰은 manifest 없이 "지금 보고 있는 주소"로 홈 화면 아이콘이 만들어진다.
+if (!isIOS) {
+  const l = document.createElement('link');
+  l.rel = 'manifest';
+  l.href = 'manifest.json';
+  document.head.appendChild(l);
+}
+let installEvent = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+
+function installBanner() {
+  if (standalone || store.get('installHidden') === '1') return '';
+  return `<div class="install" id="install"><img src="icon-192.png" alt=""><div class="tx"><b>홈 화면에 추가하기</b>앱처럼 아이콘을 눌러 바로 열 수 있어요</div>
+    <button class="go" id="installGo">추가</button><button class="x" id="installX" aria-label="닫기">✕</button></div>`;
+}
+function sheet(html) {
+  const el = document.createElement('div');
+  el.className = 'sheet';
+  el.innerHTML = `<div>${html}<button class="btn" id="sheetOk">알겠어요</button></div>`;
+  el.addEventListener('click', (e) => { if (e.target === el || e.target.id === 'sheetOk') el.remove(); });
+  document.body.appendChild(el);
+}
+async function doInstall() {
+  if (inKakao) {
+    // 카톡 안의 창에서는 홈 화면 추가가 안 돼서, 기본 브라우저로 다시 열기
+    location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(location.href);
+    return;
+  }
+  if (installEvent) {
+    installEvent.prompt();
+    const r = await installEvent.userChoice.catch(() => null);
+    installEvent = null;
+    if (r && r.outcome === 'accepted') { store.set('installHidden', '1'); document.getElementById('install')?.remove(); }
+    return;
+  }
+  if (inOtherApp) {
+    return sheet(`<h2 style="margin:0;font-size:18px">브라우저로 열어 주세요</h2>
+      <div class="step"><i>1</i><span>오른쪽 위(또는 아래) <span class="ico">⋯</span> 메뉴를 눌러요</span></div>
+      <div class="step"><i>2</i><span><b>${isIOS ? 'Safari로 열기' : '다른 브라우저로 열기'}</b>를 눌러요</span></div>
+      <div class="step"><i>3</i><span>열린 화면에서 다시 <b>추가</b> 버튼을 눌러 주세요</span></div>`);
+  }
+  if (isIOS && !q.get('n') && store.get('lastNote')) {
+    // 일지 한 장이 아니라 회원 레슨노트가 아이콘으로 열리게, 레슨노트로 이동한 뒤 안내
+    location.href = '?n=' + encodeURIComponent(store.get('lastNote')) + '&add=1';
+    return;
+  }
+  if (isIOS) {
+    return sheet(`<h2 style="margin:0;font-size:18px">아이폰 홈 화면에 추가</h2>
+      <div class="small" style="margin-top:-6px">아이폰은 보안 때문에 이 버튼으로 바로 설치할 수 없어서, 아래처럼 직접 추가해야 해요 (10초)</div>
+      <div class="step"><i>1</i><span>화면 맨 아래 주소창 왼쪽의 <span class="ico">☰</span> 또는 <span class="ico">⋯</span> 버튼을 눌러요<br><span class="small">공유 버튼 <span class="ico"><svg width="14" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E6A3E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v8h14v-8"/></svg></span>이 바로 보이면 그걸 눌러도 돼요</span></span></div>
+      <div class="step"><i>2</i><span><b>공유</b>를 누르고, 목록을 아래로 내려 <b>홈 화면에 추가</b>를 눌러요</span></div>
+      <div class="step"><i>3</i><span>오른쪽 위 <b>추가</b>를 누르면 홈 화면에 아이콘이 생겨요!</span></div>
+      <div class="small">Safari에서 열었을 때만 보여요. 다른 앱 안에서 열렸다면 먼저 Safari로 열어 주세요.</div>`);
+  }
+  sheet(`<h2 style="margin:0;font-size:18px">홈 화면에 추가</h2>
+    <div class="step"><i>1</i><span>오른쪽 위 <span class="ico">⋮</span> 메뉴를 눌러요</span></div>
+    <div class="step"><i>2</i><span><b>홈 화면에 추가</b> 또는 <b>앱 설치</b>를 눌러요</span></div>
+    <div class="step"><i>3</i><span><b>추가</b>를 누르면 끝!</span></div>`);
+}
+function wireInstall() {
+  document.getElementById('installGo')?.addEventListener('click', doInstall);
+  document.getElementById('installX')?.addEventListener('click', () => { store.set('installHidden', '1'); document.getElementById('install')?.remove(); });
+}
+
+// 홈 화면 아이콘으로 열면(주소에 회원 정보가 없을 때) 마지막으로 본 레슨노트로
+if (!q.get('l') && !q.get('n') && !q.get('b') && !q.get('c') && store.get('lastNote')) {
+  location.replace('?n=' + encodeURIComponent(store.get('lastNote')));
+}
+
+if (q.get('l')) showLesson(q.get('l'));
+else if (q.get('n')) showNote(q.get('n'));
+else if (q.get('b')) showBooking(q.get('b'));
+else if (q.get('c')) showConsent(q.get('c'));
+else if (standalone) app.innerHTML = '<div class="center">레슨노트를 찾지 못했어요.<br><br>이 아이콘을 길게 눌러 지운 다음,<br>프로님께 받은 <b>레슨노트 링크</b>를 다시 열고<br><b>추가</b> 버튼으로 홈 화면에 추가해 주세요.</div>';
+else fail('레슨비서 · 골프 프로의 레슨 일지 비서');
+</script>
+</body>
+</html>
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>레슨비서</title>
+<meta name="theme-color" content="#15201A">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="레슨노트">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#15201A;--paper:#F5F4EE;--card:#FFFFFF;--line:#E3E1D8;--soft:#ECEAE2;--sub:#59625B;--green:#2E6A3E;--greenSoft:#E6EFE5;--mint:#9FD3AC;--darkSub:#B9C6BC}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:'IBM Plex Sans KR',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:520px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column}
+header{background:var(--ink);color:var(--paper);padding:36px 20px 26px;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:44px;height:44px;border-radius:12px;background:var(--green);display:flex;align-items:center;justify-content:center}
+.brand b{font-size:16px}.brand small{display:block;font-size:12px;color:var(--darkSub)}
+.mono{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--mint)}
+h1{margin:0;font-size:23px;line-height:1.4}
+.lead{font-size:14px;color:#D3DCD5;line-height:1.6;margin:0}
+main{padding:20px;display:flex;flex-direction:column;gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;display:flex;flex-direction:column;gap:12px}
+.card h2{margin:0;font-size:15px;color:var(--green)}
+.item{display:flex;gap:10px;font-size:15px;line-height:1.6}
+.item .n{font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--green)}
+.p{font-size:15px;line-height:1.6;margin:0}
+.task{min-height:52px;border-radius:12px;border:1px solid var(--line);background:#FBFAF6;display:flex;align-items:center;gap:12px;padding:10px 14px;text-align:left;font:inherit;font-size:15px;color:var(--ink);cursor:pointer;width:100%}
+.box{width:24px;height:24px;flex:none;border-radius:7px;border:2px solid #9AA39C;background:#fff;display:flex;align-items:center;justify-content:center}
+.on .box{background:var(--green);border-color:var(--green)}
+.on span.t{color:var(--sub);text-decoration:line-through}
+.note{background:var(--greenSoft);border-radius:18px;padding:18px;display:flex;flex-direction:column;gap:6px}
+.note h2{margin:0;font-size:15px;color:#1F4A2B}
+.row{display:flex;justify-content:space-between;align-items:baseline}
+.small{font-size:12px;color:var(--sub);line-height:1.55}
+.list{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:4px 16px}
+.li{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--soft)}.li:last-child{border-bottom:0}
+.li b{display:block;font-size:14px}.li span{font-size:13px;color:var(--sub);line-height:1.55}
+.check{min-height:58px;display:flex;align-items:center;gap:12px;padding:8px 16px;border:0;border-bottom:1px solid var(--soft);background:transparent;font:inherit;color:var(--ink);text-align:left;width:100%;cursor:pointer}
+.check:last-child{border-bottom:0}.check.all{background:#FBFAF6;font-weight:700}
+.tag{color:var(--green);font-weight:700}.tag.opt{color:var(--sub)}
+.btn{height:56px;border-radius:14px;border:0;background:var(--ink);color:#fff;font:inherit;font-size:16px;font-weight:700;cursor:pointer;width:100%}
+.btn:disabled{background:#DAD8CF;color:#45504A;cursor:default}
+.link{height:48px;border:0;background:transparent;font:inherit;font-size:14px;font-weight:600;color:#45504A;text-decoration:underline;cursor:pointer;width:100%}
+.done{background:var(--greenSoft);border-radius:18px;padding:20px;text-align:center;display:flex;flex-direction:column;gap:6px}
+footer{padding:8px 20px 32px;text-align:center}
+.center{padding:60px 20px;text-align:center;color:var(--sub)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch}
+.chip{flex:none;min-width:58px;height:58px;border-radius:12px;border:1px solid var(--line);background:#fff;font:inherit;font-size:13px;color:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer}
+.chip b{font-size:16px}.chip.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.slots{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.slot{height:44px;border-radius:10px;border:1px solid var(--line);background:#fff;font:inherit;font-size:14px;color:var(--ink);cursor:pointer}
+.slot:disabled{background:#EFEDE6;color:#A3A9A2;text-decoration:line-through;cursor:default}
+.slot.on{background:var(--green);color:#fff;border-color:var(--green)}
+.mine{display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--soft)}.mine:last-child{border-bottom:0}
+.mini{height:36px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:#fff;font:inherit;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer}
+.st{font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px}
+.st.pending{background:#F7EBD9;color:#8A4E0E}.st.approved{background:var(--greenSoft);color:#1F4A2B}.st.declined,.st.withdrawn{background:#EFEDE6;color:#45504A}
+.bar{height:8px;border-radius:4px;background:var(--soft);overflow:hidden}.bar i{display:block;height:8px;background:var(--green);border-radius:4px}
+.big{font-family:'IBM Plex Mono',monospace;font-size:30px;font-weight:600}
+.lesson{border:1px solid var(--line);border-radius:14px;background:#fff;overflow:hidden}
+.lesson>button{width:100%;border:0;background:transparent;font:inherit;color:var(--ink);text-align:left;padding:14px 16px;display:flex;flex-direction:column;gap:4px;cursor:pointer}
+.lesson .body{padding:0 16px 16px;display:flex;flex-direction:column;gap:10px}
+.report{background:var(--ink);color:var(--paper);border-radius:18px;padding:18px;display:flex;flex-direction:column;gap:10px}
+.report h2{margin:0;font-size:13px;color:var(--mint)}.report .head{font-size:17px;font-weight:700;line-height:1.5}
+.report .it{font-size:14px;line-height:1.6;color:#E3E9E4}
+.install{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 14px}
+.install img{width:40px;height:40px;border-radius:10px;flex:none}
+.install .tx{flex:1;font-size:13px;line-height:1.45}.install .tx b{display:block;font-size:14px}
+.install .go{height:40px;padding:0 14px;border-radius:10px;border:0;background:var(--green);color:#fff;font:inherit;font-size:14px;font-weight:700;cursor:pointer;flex:none}
+.install .x{border:0;background:transparent;color:var(--sub);font-size:18px;padding:4px 6px;cursor:pointer}
+.sheet{position:fixed;inset:0;background:rgba(21,32,26,.55);display:flex;align-items:flex-end;z-index:9}
+.sheet>div{background:#fff;width:100%;max-width:520px;margin:0 auto;border-radius:22px 22px 0 0;padding:22px 20px 34px;display:flex;flex-direction:column;gap:14px}
+.step{display:flex;gap:12px;align-items:center;font-size:15px;line-height:1.5}
+.step i{font-style:normal;width:28px;height:28px;border-radius:14px;background:var(--greenSoft);color:#1F4A2B;font-weight:700;display:flex;align-items:center;justify-content:center;flex:none}
+.ico{display:inline-flex;vertical-align:middle;border:1px solid var(--line);border-radius:8px;padding:2px 6px;margin:0 2px}
+textarea{width:100%;min-height:72px;border-radius:12px;border:1px solid var(--line);padding:12px;font:inherit;font-size:15px;color:var(--ink);background:#FBFAF6}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="center">불러오는 중…</div></div>
+<script>
+const SUPABASE_URL = 'https://jgunytgntbjbpfffdeaw.supabase.co';
+const KEY = 'sb_publishable_fzrZnCPmhVIO8Wlm0Pq8Yw_rHH416D0';
+const app = document.getElementById('app');
+const q = new URLSearchParams(location.search);
+
+async function rpc(name, args) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${name}`, {
+    method: 'POST',
+    headers: { apikey: KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  });
+  if (!r.ok) {
+    let msg = String(r.status);
+    try { const j = await r.json(); if (j && j.message) msg = j.message; } catch {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const logo = '<div class="logo" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 240 240"><rect x="40" y="84" width="12" height="72" rx="6" fill="#9FD3AC"/><rect x="188" y="84" width="12" height="72" rx="6" fill="#9FD3AC"/><circle cx="120" cy="120" r="60" fill="#F5F4EE"/></svg></div>';
+const brandMark = '<div style="display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:18px;opacity:.6"><span class="small">레슨비서 by</span><img src="ecoswing-logo.png" alt="ECO SWING" style="width:110px;height:auto"></div>';
+const check = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l4 4 10-10"/></svg>';
+function proBrand(pro, fallbackTitle, fallbackSub) {
+  if (!pro || !pro.name) return `<div class="brand">${logo}<div><b>${fallbackTitle}</b><small>${fallbackSub}</small></div></div>`;
+  const sub = [pro.org ? `${pro.org} 프로` : '', pro.place || ''].filter(Boolean).join(' · ');
+  return `<div class="brand"><div class="logo" aria-hidden="true" style="border-radius:22px;font-size:18px;font-weight:700;color:#fff">${esc(pro.name.trim().charAt(0))}</div>
+    <div><b>${esc(pro.name)}</b><small>${esc(sub || fallbackSub)}</small></div></div>${pro.intro ? `<p class="lead" style="margin-top:-4px">${esc(pro.intro)}</p>` : ''}`;
+}
+function fail(msg) { app.innerHTML = `<div class="center">${esc(msg)}</div>`; }
+
+async function showLesson(token) {
+  let d;
+  try { d = await rpc('get_shared_lesson', { p_token: token }); } catch { return fail('일지를 불러오지 못했어요. 잠시 뒤 다시 열어주세요.'); }
+  if (!d) return fail('일지를 찾을 수 없어요. 프로님께 링크를 다시 요청해 주세요.');
+  const dt = new Date(d.started_at);
+  const date = `${dt.getFullYear()}.${String(dt.getMonth() + 1).padStart(2, '0')}.${String(dt.getDate()).padStart(2, '0')}`;
+  let done = Array.isArray(d.homework_done) ? d.homework_done.slice() : [];
+  document.title = `${d.member_name || '회원'}님 레슨 일지`;
+  if (d.booking_token) store.set('lastNote', d.booking_token);
+  const render = () => {
+    const hw = d.homework || [];
+    const count = hw.filter((_, i) => done[i]).length;
+    app.innerHTML = `
+      <header>
+        ${proBrand(d.pro, '골프 레슨 일지', '레슨비서')}
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div class="mono">${date}${d.lesson_no ? ` · ${d.lesson_no}회차 레슨` : ''}</div>
+          <h1>${esc(d.member_name || '회원')} 회원님의<br>오늘 레슨 일지</h1>
+        </div>
+      </header>
+      <main>
+        ${d.booking_token ? installBanner() : ''}
+        ${d.summary ? `<p class="p">${esc(d.summary)}</p>` : ''}
+        ${(d.corrections || []).length ? `<section class="card"><h2>오늘 배운 것</h2>${d.corrections.map((c, i) => `<div class="item"><div class="n">${String(i + 1).padStart(2, '0')}</div><div>${esc(c)}</div></div>`).join('')}</section>` : ''}
+        ${hw.length ? `<section class="card"><div class="row"><h2>다음 레슨까지 숙제</h2><div class="small">${count} / ${hw.length} 완료</div></div>
+          ${hw.map((h, i) => `<button class="task ${done[i] ? 'on' : ''}" data-i="${i}" aria-pressed="${!!done[i]}"><span class="box">${done[i] ? check : ''}</span><span class="t">${esc(h)}</span></button>`).join('')}
+          <div class="small">숙제를 하면 눌러서 체크해 주세요. 프로님께도 보여요.</div></section>` : ''}
+        ${d.problems ? `<section class="card"><h2>지금 고치고 있는 점</h2><p class="p">${esc(d.problems)}</p></section>` : ''}
+        ${d.next_plan ? `<section class="note"><h2>다음 레슨 계획</h2><p class="p">${esc(d.next_plan)}</p></section>` : ''}
+      </main>
+      <footer><div class="small">${d.audio_deleted ? '🔒 레슨 녹음 파일은 일지 작성 후 삭제되었습니다' : '🔒 레슨 녹음 파일은 일지 확인 후 삭제됩니다'}</div>
+      ${d.booking_token ? `<a class="btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none;margin:8px 0" href="?n=${encodeURIComponent(d.booking_token)}">내 레슨노트 전체 보기</a><a class="link" style="display:flex;align-items:center;justify-content:center" href="?b=${encodeURIComponent(d.booking_token)}">다음 레슨 예약 · 시간 변경 요청하기</a>` : ''}
+      ${brandMark}</footer>`;
+    wireInstall();
+    app.querySelectorAll('.task').forEach((b) =>
+      b.addEventListener('click', async () => {
+        const i = Number(b.dataset.i);
+        const next = !done[i];
+        done[i] = next; render();
+        try { const arr = await rpc('set_homework_done', { p_token: token, p_index: i, p_done: next }); if (Array.isArray(arr)) done = arr; }
+        catch { done[i] = !next; render(); alert('저장하지 못했어요. 인터넷 연결을 확인해 주세요.'); }
+        render();
+      }));
+  };
+  render();
+}
+
+async function showConsent(token) {
+  let d;
+  try { d = await rpc('get_consent', { p_token: token }); } catch { return fail('잠시 뒤 다시 열어주세요.'); }
+  if (!d) return fail('링크를 찾을 수 없어요. 프로님께 다시 요청해 주세요.');
+  const on = [false, false, false];
+  const defs = [
+    ['[필수]', '레슨 녹음 및 텍스트 변환', '일지 작성 후 녹음 파일 삭제', true],
+    ['[필수]', '개인정보 수집·이용', '이름, 연락처, 레슨 기록', true],
+    ['[선택]', '부상·통증 정보 기록', '레슨에 필요한 범위만 일지에 남겨요', false],
+  ];
+  const header = `<header>${proBrand(d.pro, '골프 레슨 녹음 안내', '첫 레슨 전 한 번만 확인해요')}
+    <h1>${esc(d.member_name)} 회원님,<br>레슨 내용을 녹음해도 될까요?</h1>
+    <p class="lead">녹음은 레슨 일지를 정확하게 남기기 위해서만 쓰여요. 일지가 만들어지면 녹음 파일은 지워집니다.</p></header>`;
+  const info = `<section class="list">
+    <div class="li"><div><b>무엇을 녹음하나요</b><span>레슨 시간 동안 프로와 회원님의 대화</span></div></div>
+    <div class="li"><div><b>무엇이 남나요</b><span>글로 정리된 레슨 일지와 프로의 회원 관리 메모</span></div></div>
+    <div class="li"><div><b>녹음 파일은 언제 지워지나요</b><span>프로가 일지를 확인하면 바로, 늦어도 레슨 3일 뒤 자동 삭제</span></div></div></section>`;
+  const finished = (agree) => {
+    app.innerHTML = `${header}<main><div class="done"><b style="font-size:17px">${agree ? '동의해 주셔서 감사해요' : '녹음 없이 레슨을 진행할게요'}</b>
+      <span class="small">${agree ? '레슨이 끝나면 정리된 일지를 링크로 보내드릴게요.' : '마음이 바뀌면 이 링크에서 언제든 다시 동의할 수 있어요.'}</span></div>
+      <button class="link" id="again">${agree ? '동의 철회하기' : '다시 선택하기'}</button></main><footer>${brandMark}</footer>`;
+    document.getElementById('again').onclick = async () => {
+      if (agree) { try { await rpc('set_consent', { p_token: token, p_agree: false, p_health: false }); } catch {} return finished(false); }
+      render();
+    };
+  };
+  const render = () => {
+    const all = on.every(Boolean), ready = on[0] && on[1];
+    app.innerHTML = `${header}<main>${info}
+      <section class="card" style="padding:0;gap:0;overflow:hidden">
+        <button class="check all" data-i="all" aria-pressed="${all}"><span class="box" style="${all ? 'background:#2E6A3E;border-color:#2E6A3E' : ''}">${all ? check : ''}</span>전체 동의</button>
+        ${defs.map((x, i) => `<button class="check" data-i="${i}" aria-pressed="${on[i]}"><span class="box" style="${on[i] ? 'background:#2E6A3E;border-color:#2E6A3E' : ''}">${on[i] ? check : ''}</span><span><span style="font-size:14px"><span class="tag ${x[3] ? '' : 'opt'}">${x[0]}</span> ${x[1]}</span><br><span class="small">${x[2]}</span></span></button>`).join('')}
+      </section>
+      <div class="small">동의는 언제든 프로에게 말하거나 이 링크에서 철회할 수 있어요. 철회하면 녹음 없이 레슨이 진행되고, 이미 남은 일지 삭제도 요청할 수 있어요.</div>
+      <button class="btn" id="ok" ${ready ? '' : 'disabled'}>${ready ? '동의하기' : '필수 항목에 동의해주세요'}</button>
+      <button class="link" id="no">녹음 없이 레슨만 받을게요</button></main><footer>${brandMark}</footer>`;
+    app.querySelectorAll('.check').forEach((b) => b.onclick = () => {
+      const i = b.dataset.i;
+      if (i === 'all') { const v = !on.every(Boolean); on.fill(v); } else on[Number(i)] = !on[Number(i)];
+      render();
+    });
+    document.getElementById('ok').onclick = async () => {
+      try { await rpc('set_consent', { p_token: token, p_agree: true, p_health: on[2] }); finished(true); }
+      catch { alert('저장하지 못했어요. 인터넷 연결을 확인해 주세요.'); }
+    };
+    document.getElementById('no').onclick = async () => {
+      try { await rpc('set_consent', { p_token: token, p_agree: false, p_health: false }); } catch {}
+      finished(false);
+    };
+  };
+  if (d.consented_at) finished(true); else render();
+}
+
+const DOW = ['일', '월', '화', '수', '목', '금', '토'];
+const two = (n) => String(n).padStart(2, '0');
+// 대한민국 공휴일·대체공휴일 (프로가 "공휴일 쉬기"를 켰을 때)
+const KR_HOLIDAYS = new Set(['2026-01-01','2026-02-16','2026-02-17','2026-02-18','2026-03-01','2026-03-02','2026-05-05','2026-05-24','2026-05-25','2026-06-03','2026-06-06','2026-07-17','2026-08-15','2026-08-17','2026-09-24','2026-09-25','2026-09-26','2026-10-03','2026-10-05','2026-10-09','2026-12-25',
+  '2027-01-01','2027-02-06','2027-02-07','2027-02-08','2027-02-09','2027-03-01','2027-05-01','2027-05-03','2027-05-05','2027-05-13','2027-06-06','2027-07-17','2027-07-19','2027-08-15','2027-08-16','2027-09-14','2027-09-15','2027-09-16','2027-10-03','2027-10-04','2027-10-09','2027-10-11','2027-12-25','2027-12-27']);
+const fmt = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}월 ${d.getDate()}일(${DOW[d.getDay()]}) ${two(d.getHours())}:${two(d.getMinutes())}`; };
+const KIND = { new: '새 레슨 예약', change: '시간 변경', cancel: '레슨 취소' };
+const STATUS = { pending: '프로님 확인 중', approved: '확정', declined: '어려워요', withdrawn: '요청 취소함' };
+
+async function showBooking(token) {
+  let d;
+  try { d = await rpc('get_booking', { p_token: token }); } catch { return fail('잠시 뒤 다시 열어주세요.'); }
+  if (!d) return fail('링크를 찾을 수 없어요. 프로님께 다시 요청해 주세요.');
+  document.title = '레슨 예약';
+  let pick = null; // { kind, schedule_id, date, from }
+  let day = 0, slot = null;
+
+  const header = () => `<header>${proBrand(d.pro, '레슨 예약', '레슨비서')}
+    <h1>${esc(d.member_name)} 회원님,<br>${pick ? (pick.kind === 'new' ? '원하는 레슨 시간을 골라주세요' : '바꾸고 싶은 시간을 골라주세요') : '예약·변경을 도와드릴게요'}</h1></header>`;
+
+  const busyAt = (start, end) => (d.busy || []).some((b) => {
+    if (pick && pick.from && new Date(b.start).getTime() === new Date(pick.from).getTime()) return false;
+    return new Date(b.start) < end && new Date(b.end) > start;
+  });
+
+  const home = () => {
+    pick = null; slot = null;
+    const mine = d.mine || [];
+    const reqs = d.requests || [];
+    app.innerHTML = `${header()}<main>
+      <section class="card"><h2>예정된 내 레슨</h2>
+        ${mine.length ? mine.map((m, i) => `<div class="mine"><div style="flex:1;font-size:15px;font-weight:600">${fmt(m.start)}</div>
+          <button class="mini" data-ch="${i}">시간 변경</button><button class="mini" data-cx="${i}">취소</button></div>`).join('')
+          : '<p class="small" style="margin:0">앞으로 4주 동안 잡힌 레슨이 없어요.</p>'}
+      </section>
+      <button class="btn" id="new">+ 새 레슨 예약 요청</button>
+      ${reqs.length ? `<section class="card"><h2>내 요청</h2>${reqs.map((r) => `<div class="mine"><div style="flex:1;display:flex;flex-direction:column;gap:2px">
+          <span style="font-size:14px;font-weight:600">${KIND[r.kind]}${r.requested_start ? ` · ${fmt(r.requested_start)}` : r.from_start ? ` · ${fmt(r.from_start)}` : ''}</span>
+          ${r.kind === 'change' && r.from_start ? `<span class="small">기존 ${fmt(r.from_start)}</span>` : ''}</div>
+          <span class="st ${r.status}">${STATUS[r.status]}</span>${r.status === 'pending' ? `<button class="mini" data-wd="${esc(r.id)}">요청 취소</button>` : ''}</div>`).join('')}</section>` : ''}
+      <div class="small" style="text-align:center">요청을 보내면 프로님이 확인 후 확정해 드려요.</div>
+    </main><footer>${brandMark}</footer>`;
+    document.getElementById('new').onclick = () => { pick = { kind: 'new' }; picker(); };
+    app.querySelectorAll('[data-ch]').forEach((b) => b.onclick = () => { const m = mine[Number(b.dataset.ch)]; pick = { kind: 'change', schedule_id: m.schedule_id, date: m.date, from: m.start }; picker(); });
+    app.querySelectorAll('[data-cx]').forEach((b) => b.onclick = async () => {
+      const m = mine[Number(b.dataset.cx)];
+      if (!confirm(`${fmt(m.start)} 레슨 취소를 요청할까요?`)) return;
+      await send({ p_kind: 'cancel', p_schedule_id: m.schedule_id, p_date: m.date, p_requested_start: null, p_note: null });
+    });
+    app.querySelectorAll('[data-wd]').forEach((b) => b.onclick = async () => {
+      try { d = await rpc('withdraw_booking', { p_token: token, p_id: b.dataset.wd }); home(); } catch (e) { alert(e.message); }
+    });
+  };
+
+  const send = async (args) => {
+    try { d = await rpc('request_booking', { p_token: token, ...args }); alert('요청을 보냈어요. 프로님이 확인하면 확정돼요.'); home(); }
+    catch (e) { alert(/^\d+$/.test(e.message) ? '요청을 보내지 못했어요. 잠시 뒤 다시 해주세요.' : e.message); }
+  };
+
+  const picker = () => {
+    const dur = d.duration_min || 50;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const days = Array.from({ length: 21 }, (_, i) => { const x = new Date(today); x.setDate(x.getDate() + i); return x; });
+    const base = days[day];
+    const now = new Date();
     const bh = d.booking && d.booking.slots ? d.booking : null; // 프로가 정한 예약 시간표
     // 그날 이미 잡힌 레슨 수 (바꾸려는 내 레슨은 빼고)
     const ymdOf = (x) => `${x.getFullYear()}-${two(x.getMonth() + 1)}-${two(x.getDate())}`;
