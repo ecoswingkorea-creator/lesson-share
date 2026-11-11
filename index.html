@@ -219,6 +219,9 @@ async function showConsent(token) {
 
 const DOW = ['일', '월', '화', '수', '목', '금', '토'];
 const two = (n) => String(n).padStart(2, '0');
+// 대한민국 공휴일·대체공휴일 (프로가 "공휴일 쉬기"를 켰을 때)
+const KR_HOLIDAYS = new Set(['2026-01-01','2026-02-16','2026-02-17','2026-02-18','2026-03-01','2026-03-02','2026-05-05','2026-05-24','2026-05-25','2026-06-03','2026-06-06','2026-07-17','2026-08-15','2026-08-17','2026-09-24','2026-09-25','2026-09-26','2026-10-03','2026-10-05','2026-10-09','2026-12-25',
+  '2027-01-01','2027-02-06','2027-02-07','2027-02-08','2027-02-09','2027-03-01','2027-05-01','2027-05-03','2027-05-05','2027-05-13','2027-06-06','2027-07-17','2027-07-19','2027-08-15','2027-08-16','2027-09-14','2027-09-15','2027-09-16','2027-10-03','2027-10-04','2027-10-09','2027-10-11','2027-12-25','2027-12-27']);
 const fmt = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}월 ${d.getDate()}일(${DOW[d.getDay()]}) ${two(d.getHours())}:${two(d.getMinutes())}`; };
 const KIND = { new: '새 레슨 예약', change: '시간 변경', cancel: '레슨 취소' };
 const STATUS = { pending: '프로님 확인 중', approved: '확정', declined: '어려워요', withdrawn: '요청 취소함' };
@@ -284,7 +287,18 @@ async function showBooking(token) {
     const ymdOf = (x) => `${x.getFullYear()}-${two(x.getMonth() + 1)}-${two(x.getDate())}`;
     const lessonsOn = (x) => (d.busy || []).filter((b) => b.kind === 'lesson' && b.date === ymdOf(x)
       && !(pick && pick.from && new Date(b.start).getTime() === new Date(pick.from).getTime())).length;
-    const dayTimes = (x) => bh ? (bh.slots[String(x.getDay())] || []) : null;
+    // 휴무일: 날짜 지정 · 공휴일 · 매달 n째 요일
+    const closedWhy = (x) => {
+      const c = bh && bh.closed; if (!c) return '';
+      const key = ymdOf(x);
+      if ((c.dates || []).includes(key)) return '휴무일';
+      if (c.holidays && KR_HOLIDAYS.has(key)) return '공휴일';
+      const nth = Math.ceil(x.getDate() / 7);
+      const last = new Date(x.getFullYear(), x.getMonth() + 1, 0).getDate() - x.getDate() < 7;
+      if ((c.monthly || []).some((m) => m.dow === x.getDay() && (m.nth === nth || (m.nth === 5 && last)))) return '정기 휴무';
+      return '';
+    };
+    const dayTimes = (x) => bh ? (closedWhy(x) ? [] : (bh.slots[String(x.getDay())] || [])) : null;
     const dayFull = (x) => bh && bh.max_per_day ? lessonsOn(x) >= bh.max_per_day : false;
     const slots = [];
     const times = dayTimes(base);
@@ -304,7 +318,7 @@ async function showBooking(token) {
       }
     }
     const open = slots.filter((x) => !x.off).length;
-    const dayNote = times && !times.length ? '이 날은 레슨이 없는 날이에요' : dayFull(base) ? '이 날은 예약이 다 찼어요' : !open ? '이 날은 남은 시간이 없어요' : '';
+    const dayNote = closedWhy(base) ? `이 날은 쉬는 날이에요 (${closedWhy(base)})` : times && !times.length ? '이 날은 레슨이 없는 날이에요' : dayFull(base) ? '이 날은 예약이 다 찼어요' : !open ? '이 날은 남은 시간이 없어요' : '';
     app.innerHTML = `${header()}<main>
       ${pick.kind === 'change' ? `<div class="small">기존 레슨: <b>${fmt(pick.from)}</b></div>` : ''}
       <section class="card"><h2>날짜</h2><div class="chips">${days.map((x, i) => { const t = dayTimes(x); const closed = (t && !t.length) || dayFull(x); return `<button class="chip ${i === day ? 'on' : ''}" data-day="${i}" ${closed && i !== day ? 'style="opacity:.35"' : ''}><span>${i === 0 ? '오늘' : DOW[x.getDay()]}</span><b>${x.getDate()}</b></button>`; }).join('')}</div></section>
