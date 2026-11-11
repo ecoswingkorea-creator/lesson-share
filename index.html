@@ -279,18 +279,37 @@ async function showBooking(token) {
     const days = Array.from({ length: 21 }, (_, i) => { const x = new Date(today); x.setDate(x.getDate() + i); return x; });
     const base = days[day];
     const now = new Date();
+    const bh = d.booking && d.booking.slots ? d.booking : null; // 프로가 정한 예약 시간표
+    // 그날 이미 잡힌 레슨 수 (바꾸려는 내 레슨은 빼고)
+    const ymdOf = (x) => `${x.getFullYear()}-${two(x.getMonth() + 1)}-${two(x.getDate())}`;
+    const lessonsOn = (x) => (d.busy || []).filter((b) => b.kind === 'lesson' && b.date === ymdOf(x)
+      && !(pick && pick.from && new Date(b.start).getTime() === new Date(pick.from).getTime())).length;
+    const dayTimes = (x) => bh ? (bh.slots[String(x.getDay())] || []) : null;
+    const dayFull = (x) => bh && bh.max_per_day ? lessonsOn(x) >= bh.max_per_day : false;
     const slots = [];
-    const steps = [0, 15, 30, 45]; // 15분 단위로 고를 수 있게
-    for (let h = 6; h <= 22; h++) for (const mm of steps) {
-      const st = new Date(base); st.setHours(h, mm, 0, 0);
-      const en = new Date(st.getTime() + dur * 60000);
-      if (en.getHours() > 23 || (en.getHours() === 23 && en.getMinutes() > 0)) continue;
-      slots.push({ st, off: st <= now || busyAt(st, en) });
+    const times = dayTimes(base);
+    if (times) {
+      for (const t of times) {
+        const st = new Date(base); st.setHours(Number(t.slice(0, 2)), Number(t.slice(3, 5)), 0, 0);
+        const en = new Date(st.getTime() + dur * 60000);
+        slots.push({ st, off: st <= now || busyAt(st, en) || dayFull(base) });
+      }
+    } else {
+      const steps = [0, 15, 30, 45]; // 시간표가 없으면 15분 단위
+      for (let h = 6; h <= 22; h++) for (const mm of steps) {
+        const st = new Date(base); st.setHours(h, mm, 0, 0);
+        const en = new Date(st.getTime() + dur * 60000);
+        if (en.getHours() > 23 || (en.getHours() === 23 && en.getMinutes() > 0)) continue;
+        slots.push({ st, off: st <= now || busyAt(st, en) });
+      }
     }
+    const open = slots.filter((x) => !x.off).length;
+    const dayNote = times && !times.length ? '이 날은 레슨이 없는 날이에요' : dayFull(base) ? '이 날은 예약이 다 찼어요' : !open ? '이 날은 남은 시간이 없어요' : '';
     app.innerHTML = `${header()}<main>
       ${pick.kind === 'change' ? `<div class="small">기존 레슨: <b>${fmt(pick.from)}</b></div>` : ''}
-      <section class="card"><h2>날짜</h2><div class="chips">${days.map((x, i) => `<button class="chip ${i === day ? 'on' : ''}" data-day="${i}"><span>${i === 0 ? '오늘' : DOW[x.getDay()]}</span><b>${x.getDate()}</b></button>`).join('')}</div></section>
+      <section class="card"><h2>날짜</h2><div class="chips">${days.map((x, i) => { const t = dayTimes(x); const closed = (t && !t.length) || dayFull(x); return `<button class="chip ${i === day ? 'on' : ''}" data-day="${i}" ${closed && i !== day ? 'style="opacity:.35"' : ''}><span>${i === 0 ? '오늘' : DOW[x.getDay()]}</span><b>${x.getDate()}</b></button>`; }).join('')}</div></section>
       <section class="card"><div class="row"><h2>시간</h2><span class="small">${dur}분 레슨 · 회색은 이미 찬 시간</span></div>
+        ${dayNote ? `<p class="small" style="margin:4px 0 0">${dayNote}</p>` : ''}
         <div class="slots">${slots.map((x, i) => `<button class="slot ${slot && slot.getTime() === x.st.getTime() ? 'on' : ''}" data-slot="${i}" ${x.off ? 'disabled' : ''}>${two(x.st.getHours())}:${two(x.st.getMinutes())}</button>`).join('')}</div></section>
       <textarea id="note" placeholder="프로님께 남길 말 (선택)"></textarea>
       <button class="btn" id="go" ${slot ? '' : 'disabled'}>${slot ? `${fmt(slot.toISOString())} 으로 요청하기` : '시간을 골라주세요'}</button>
