@@ -111,7 +111,7 @@ const brandMark = '<div style="display:flex;flex-direction:column;align-items:ce
 const check = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l4 4 10-10"/></svg>';
 function proBrand(pro, fallbackTitle, fallbackSub) {
   if (!pro || !pro.name) return `<div class="brand">${logo}<div><b>${fallbackTitle}</b><small>${fallbackSub}</small></div></div>`;
-  const sub = [pro.org ? `${pro.org} 프로` : '', pro.place || ''].filter(Boolean).join(' · ');
+  const sub = [pro.org ? (/^(KPGA|KLPGA|USGTF|PGA)$/.test(pro.org) ? `${pro.org} 프로` : pro.org) : '', pro.place || ''].filter(Boolean).join(' · ');
   return `<div class="brand"><div class="logo" aria-hidden="true" style="border-radius:22px;font-size:18px;font-weight:700;color:#fff">${esc(pro.name.trim().charAt(0))}</div>
     <div><b>${esc(pro.name)}</b><small>${esc(sub || fallbackSub)}</small></div></div>${pro.intro ? `<p class="lead" style="margin-top:-4px">${esc(pro.intro)}</p>` : ''}`;
 }
